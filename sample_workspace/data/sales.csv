@@ -1,0 +1,11 @@
+date,region,product,units,revenue
+2026-01-04,north,alpha,12,240
+2026-01-05,south,beta,8,160
+2026-01-06,east,alpha,15,300
+2026-01-07,west,gamma,4,120
+2026-01-08,north,beta,11,220
+2026-01-09,south,alpha,9,180
+2026-01-10,east,gamma,7,210
+2026-01-11,west,beta,13,260
+2026-01-12,north,gamma,6,180
+2026-01-13,south,alpha,10,200

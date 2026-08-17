@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0b0d10;
+  --panel: #12151a;
+  --panel-2: #171b22;
+  --border: #232833;
+  --text: #e8edf5;
+  --muted: #8b95a7;
+  --accent: #7c8cff;
+  --accent-2: #9aa5ff;
+  --success: #3dd68c;
+  --warning: #f5c542;
+  --error: #ff6b6b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(124, 140, 255, 0.3);
+}
+
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+.recharts-default-tooltip,
+.recharts-tooltip-item,
+.recharts-tooltip-label {
+  color: var(--text) !important;
+}
+
+.recharts-legend-item-text {
+  color: var(--muted) !important;
+}
+
+.recharts-pie-label-text {
+  fill: var(--text) !important;
+}

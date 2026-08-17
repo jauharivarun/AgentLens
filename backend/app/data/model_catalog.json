@@ -1,0 +1,74 @@
+[
+  {
+    "provider": "openai",
+    "model_id": "gpt-4o-mini",
+    "display_name": "GPT-4o mini",
+    "enabled": true,
+    "context_window": 128000,
+    "supports_tools": true,
+    "supports_rag": true
+  },
+  {
+    "provider": "openai",
+    "model_id": "gpt-4o",
+    "display_name": "GPT-4o",
+    "enabled": true,
+    "context_window": 128000,
+    "supports_tools": true,
+    "supports_rag": true
+  },
+  {
+    "provider": "openai",
+    "model_id": "gpt-4.1-mini",
+    "display_name": "GPT-4.1 mini",
+    "enabled": true,
+    "context_window": 1047576,
+    "supports_tools": true,
+    "supports_rag": true
+  },
+  {
+    "provider": "openai",
+    "model_id": "gpt-4.1",
+    "display_name": "GPT-4.1",
+    "enabled": true,
+    "context_window": 1047576,
+    "supports_tools": true,
+    "supports_rag": true
+  },
+  {
+    "provider": "openai",
+    "model_id": "o4-mini",
+    "display_name": "o4-mini",
+    "enabled": true,
+    "context_window": 200000,
+    "supports_tools": true,
+    "supports_rag": true
+  },
+  {
+    "provider": "groq",
+    "model_id": "openai/gpt-oss-20b",
+    "display_name": "GPT-OSS 20B",
+    "enabled": true,
+    "context_window": 131072,
+    "supports_tools": true,
+    "supports_rag": true
+  },
+  {
+    "provider": "groq",
+    "model_id": "openai/gpt-oss-120b",
+    "display_name": "GPT-OSS 120B",
+    "enabled": true,
+    "context_window": 131072,
+    "supports_tools": true,
+    "supports_rag": true
+  },
+  {
+    "provider": "groq",
+    "model_id": "qwen/qwen3.6-27b",
+    "display_name": "Qwen 3.6 27B",
+    "enabled": true,
+    "context_window": 131072,
+    "supports_tools": true,
+    "supports_rag": true
+  }
+]

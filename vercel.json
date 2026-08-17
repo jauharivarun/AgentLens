@@ -1,0 +1,14 @@
+{
+  "installCommand": "cd frontend && npm install",
+  "buildCommand": "cd frontend && npm run build",
+  "outputDirectory": "frontend/dist",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index.py" }
+  ],
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60,
+      "includeFiles": "backend/**,sample_workspace/**"
+    }
+  }
+}
