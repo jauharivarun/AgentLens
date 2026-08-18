@@ -84,27 +84,3 @@ def test_prune_chroma_removes_stale_ids():
     collection = FakeCollection()
     assert _prune_chroma(collection, {"keep-0"}) == 1
     assert collection.deleted == ["gone-0"]
-
-
-def test_read_builtin_knowledge_file():
-    response = client.get("/api/files", params={"path": "knowledge/company_policy.md"})
-    assert response.status_code == 200
-    body = response.json()
-    assert body["name"] == "company_policy.md"
-    assert body["source"] == "knowledge"
-    assert body["content"]
-
-
-def test_read_rejects_path_escape():
-    response = client.get("/api/files", params={"path": "../backend/.env"})
-    assert response.status_code == 400
-
-
-def test_read_rejects_files_outside_knowledge_folders():
-    response = client.get("/api/files", params={"path": "src/main.py"})
-    assert response.status_code == 400
-
-
-def test_read_missing_file_is_404():
-    response = client.get("/api/files", params={"path": "uploads/not_here.md"})
-    assert response.status_code == 404

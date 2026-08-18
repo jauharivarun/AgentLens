@@ -24,8 +24,6 @@ ALLOWED_COMMAND_PREFIXES = (
     ("python3",),
 )
 
-ALLOWED_MODULES = {"pytest", "unittest"}
-
 BLOCKED_TOKENS = {
     "rm",
     "sudo",
@@ -197,10 +195,6 @@ def _command_allowed(parts: list[str]) -> bool:
                 script = parts[1] if len(parts) > 1 else ""
                 if script.startswith("-") and script not in {"-m"}:
                     return False
-                if script == "-m":
-                    module = parts[2] if len(parts) > 2 else ""
-                    if module.lower() not in ALLOWED_MODULES:
-                        return False
                 if script and not script.startswith("-"):
                     try:
                         resolve_workspace_path(script)

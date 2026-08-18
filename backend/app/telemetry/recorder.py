@@ -12,35 +12,6 @@ from . import supabase_store
 logger = logging.getLogger(__name__)
 
 
-SUMMARY_FIELDS = (
-    "model_version",
-    "llm_call_count",
-    "tool_call_count",
-    "retry_count",
-    "files_read_count",
-    "files_modified_count",
-    "command_count",
-    "rag_query_count",
-    "chunks_retrieved",
-    "tests_run",
-    "tests_passed",
-    "estimated_cost_usd",
-    "time_to_first_edit_ms",
-    "tool_error_count",
-    "files_touched_count",
-    "lines_added",
-    "lines_removed",
-    "edit_count",
-    "correction_detected",
-    "abandoned",
-)
-
-
-def _summary_patch(execution: dict[str, Any]) -> dict[str, Any]:
-    """Live counters accumulated in memory, ready to persist alongside a status change."""
-    return {field: execution.get(field) for field in SUMMARY_FIELDS}
-
-
 class TelemetryRecorder:
     def __init__(self) -> None:
         self.store = memory_store
@@ -451,7 +422,8 @@ class TelemetryRecorder:
             "final_output": final_output,
         }
         self.store.update_execution(execution_id, patch)
-        supabase_store.persist_update("executions", "id", execution_id, {**patch, **_summary_patch(execution)})
+        persistable = {k: v for k, v in patch.items()}
+        supabase_store.persist_update("executions", "id", execution_id, persistable)
         await self.record_execution_event(execution_id, "execution_completed", "Execution completed", {"outcome": outcome})
         return self.store.get_execution(execution_id)
 
@@ -471,7 +443,7 @@ class TelemetryRecorder:
             "final_output": error,
         }
         self.store.update_execution(execution_id, patch)
-        supabase_store.persist_update("executions", "id", execution_id, {**patch, **_summary_patch(execution)})
+        supabase_store.persist_update("executions", "id", execution_id, patch)
         await self.record_execution_event(
             execution_id,
             "execution_failed",
@@ -496,7 +468,7 @@ class TelemetryRecorder:
             "final_output": message,
         }
         self.store.update_execution(execution_id, patch)
-        supabase_store.persist_update("executions", "id", execution_id, {**patch, **_summary_patch(execution)})
+        supabase_store.persist_update("executions", "id", execution_id, patch)
         await self.record_execution_event(
             execution_id,
             "execution_cancelled",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from ..agent.tools import workspace_root
 from ..rag.service import ingest_knowledge, list_knowledge_catalog
@@ -12,7 +12,6 @@ router = APIRouter()
 
 ALLOWED_SUFFIXES = {".md", ".txt", ".csv", ".json", ".py"}
 MAX_BYTES = 2_000_000
-MAX_VIEW_CHARS = 400_000
 
 
 def _safe_name(name: str) -> str:
@@ -50,45 +49,6 @@ def _upload_path(name: str) -> Path:
     if dest.parent != folder:
         raise HTTPException(status_code=400, detail="Path is outside uploads")
     return dest
-
-
-READABLE_FOLDERS = ("uploads", "knowledge")
-
-
-def _readable_path(rel: str) -> Path:
-    """Resolve a listed knowledge/upload path to a real file inside the workspace."""
-    if not rel or ".." in rel or rel.startswith(("/", "\\")):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-    root = workspace_root().resolve()
-    target = (root / rel).resolve()
-    if root not in target.parents:
-        raise HTTPException(status_code=400, detail="Path is outside the workspace")
-    if target.parent.name not in READABLE_FOLDERS or target.parent.parent != root:
-        raise HTTPException(status_code=400, detail="Only knowledge and upload files can be read")
-    if target.suffix.lower() not in ALLOWED_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Only text files can be read")
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    return target
-
-
-@router.get("/api/files")
-async def read_workspace_file(path: str = Query(...)) -> dict:
-    """Return the text of an indexed knowledge or upload file so the UI can view or download it."""
-    target = _readable_path(path)
-    size = target.stat().st_size
-    text = target.read_text(encoding="utf-8", errors="replace")
-    truncated = len(text) > MAX_VIEW_CHARS
-    if truncated:
-        text = text[:MAX_VIEW_CHARS]
-    return {
-        "name": target.name,
-        "path": path,
-        "bytes": size,
-        "content": text,
-        "truncated": truncated,
-        "source": target.parent.name,
-    }
 
 
 @router.get("/api/uploads")

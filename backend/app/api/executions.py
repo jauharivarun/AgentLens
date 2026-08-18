@@ -11,7 +11,7 @@ from ..agent.runtime import run_agent
 from ..catalog import get_model
 from ..config import get_settings
 from ..telemetry.analytics import execution_detail, fingerprint
-from ..telemetry import store
+from ..telemetry.memory import memory_store
 from ..telemetry.recorder import recorder
 
 router = APIRouter()
@@ -89,14 +89,14 @@ async def get_execution(execution_id: str, x_installation_id: str | None = Heade
 @router.get("/api/executions/{execution_id}/events")
 async def get_events(execution_id: str, x_installation_id: str | None = Header(default=None)) -> dict[str, Any]:
     installation_id = _installation(x_installation_id)
-    execution = store.get_execution(execution_id)
+    execution = memory_store.get_execution(execution_id)
     if not execution or execution.get("installation_id") != installation_id:
         raise HTTPException(status_code=404, detail="Execution not found")
     return {
         "execution_id": execution_id,
         "status": execution.get("status"),
         "fingerprint": fingerprint(execution),
-        "events": store.events_for(execution_id),
+        "events": memory_store.events_for(execution_id),
         "final_output": execution.get("final_output"),
         "outcome": execution.get("outcome"),
     }
@@ -105,7 +105,7 @@ async def get_events(execution_id: str, x_installation_id: str | None = Header(d
 @router.post("/api/executions/{execution_id}/stop")
 async def stop_execution(execution_id: str, x_installation_id: str | None = Header(default=None)) -> dict[str, Any]:
     installation_id = _installation(x_installation_id)
-    execution = store.get_execution(execution_id)
+    execution = memory_store.get_execution(execution_id)
     if not execution or execution.get("installation_id") != installation_id:
         raise HTTPException(status_code=404, detail="Execution not found")
     if execution.get("status") not in {"running", "queued"}:

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import { FileViewer, downloadText, type ViewedFile } from "./FileViewer";
 
 export type KnowledgeFile = { name: string; path: string; bytes: number };
 
@@ -23,8 +22,6 @@ export function KnowledgeFilesPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [downloading, setDownloading] = useState<string | null>(null);
-  const [viewing, setViewing] = useState<ViewedFile | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -52,61 +49,6 @@ export function KnowledgeFilesPanel({
     }
   }
 
-  async function onDownload(file: KnowledgeFile) {
-    setDownloading(file.path);
-    try {
-      const data = await api.fileContent(file.path);
-      downloadText(data.name, data.content);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Could not download file");
-    } finally {
-      setDownloading(null);
-    }
-  }
-
-  function fileRow(file: KnowledgeFile, deletable: boolean) {
-    return (
-      <li key={file.path} className="rounded-md border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5">
-        <button
-          type="button"
-          onClick={() => setViewing(file)}
-          className="block w-full text-left"
-          title={`Open ${file.path}`}
-        >
-          <div className="truncate text-xs text-white hover:text-[var(--accent-2)]">{file.name}</div>
-          <div className="text-[11px] text-[var(--muted)]">{formatBytes(file.bytes)}</div>
-        </button>
-        <div className="mt-1 flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setViewing(file)}
-            className="text-[11px] text-[var(--accent)] hover:text-white"
-          >
-            View
-          </button>
-          <button
-            type="button"
-            disabled={downloading === file.path}
-            onClick={() => onDownload(file)}
-            className="text-[11px] text-[var(--accent)] hover:text-white disabled:opacity-40"
-          >
-            {downloading === file.path ? "Preparing…" : "Download"}
-          </button>
-          {deletable ? (
-            <button
-              type="button"
-              disabled={deleting === file.name}
-              onClick={() => onDelete(file.name)}
-              className="ml-auto text-[11px] text-[var(--error)] hover:text-white disabled:opacity-40"
-            >
-              {deleting === file.name ? "Deleting…" : "Delete"}
-            </button>
-          ) : null}
-        </div>
-      </li>
-    );
-  }
-
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -117,24 +59,47 @@ export function KnowledgeFilesPanel({
         Knowledge files
       </button>
       {open ? (
-        <div className="absolute bottom-full left-0 z-20 mb-2 max-h-[60vh] w-80 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3 shadow-lg">
+        <div className="absolute bottom-full left-0 z-20 mb-2 w-80 rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3 shadow-lg">
           <div className="text-xs font-medium text-white">Indexed for Search knowledge</div>
           <p className="mt-1 text-[11px] text-[var(--muted)]">
-            Click a file to read it, or download a copy. Delete an upload so it is not retrieved on the next run.
-            Built-in demo files stay.
+            Delete an upload so it is not retrieved on the next run. Built-in demo files stay.
           </p>
           <div className="mt-3 text-[11px] uppercase tracking-wide text-[var(--muted)]">Your uploads</div>
           {uploads.length ? (
-            <ul className="mt-1 space-y-1">{uploads.map((file) => fileRow(file, true))}</ul>
+            <ul className="mt-1 space-y-1">
+              {uploads.map((file) => (
+                <li key={file.path} className="flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs text-white" title={file.name}>
+                      {file.name}
+                    </div>
+                    <div className="text-[11px] text-[var(--muted)]">{formatBytes(file.bytes)}</div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={deleting === file.name}
+                    onClick={() => onDelete(file.name)}
+                    className="shrink-0 text-xs text-[var(--error)] hover:text-white disabled:opacity-40"
+                  >
+                    {deleting === file.name ? "Deleting…" : "Delete"}
+                  </button>
+                </li>
+              ))}
+            </ul>
           ) : (
             <p className="mt-1 text-xs text-[var(--muted)]">No uploads yet.</p>
           )}
           <div className="mt-3 text-[11px] uppercase tracking-wide text-[var(--muted)]">Built-in knowledge</div>
           <p className="mt-1 text-[11px] text-[var(--muted)]">Always included when Search knowledge is on.</p>
-          <ul className="mt-1 space-y-1">{builtin.map((file) => fileRow(file, false))}</ul>
+          <ul className="mt-1 space-y-1">
+            {builtin.map((file) => (
+              <li key={file.path} className="truncate text-xs text-[var(--muted)]" title={file.path}>
+                {file.name}
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
-      {viewing ? <FileViewer file={viewing} onClose={() => setViewing(null)} /> : null}
     </div>
   );
 }

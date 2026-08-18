@@ -50,30 +50,3 @@ def persist_update(table: str, key: str, value: str, patch: dict[str, Any]) -> N
         client.table(table).update(patch).eq(key, value).execute()
     except Exception as exc:
         logger.warning("Telemetry update failed for %s: %s", table, exc)
-
-
-def fetch(
-    table: str,
-    *,
-    eq: dict[str, Any] | None = None,
-    in_: dict[str, list[str]] | None = None,
-    order: str | None = None,
-) -> list[dict[str, Any]] | None:
-    """Read rows back. Returns None when Supabase is unavailable so callers can fall back."""
-    client = get_supabase()
-    if client is None:
-        return None
-    try:
-        query = client.table(table).select("*")
-        for key, value in (eq or {}).items():
-            query = query.eq(key, value)
-        for key, values in (in_ or {}).items():
-            if not values:
-                return []
-            query = query.in_(key, values)
-        if order:
-            query = query.order(order)
-        return query.execute().data or []
-    except Exception as exc:
-        logger.warning("Telemetry fetch failed for %s: %s", table, exc)
-        return None

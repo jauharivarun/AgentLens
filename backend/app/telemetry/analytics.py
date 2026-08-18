@@ -4,8 +4,7 @@ from statistics import median
 from typing import Any
 
 from ..catalog import model_display_name, model_label
-from . import store
-from .memory import elapsed_ms
+from .memory import elapsed_ms, memory_store
 
 
 def _in_range(value: str | None, start: str | None, end: str | None) -> bool:
@@ -19,9 +18,7 @@ def _in_range(value: str | None, start: str | None, end: str | None) -> bool:
 
 
 def _filtered_executions(installation_id: str, filters: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = store.list_executions(installation_id)
-    needs_tasks = bool(filters.get("task_type")) or filters.get("rag_enabled") is True
-    tasks = store.get_tasks_many([row.get("task_id") for row in rows]) if needs_tasks else {}
+    rows = memory_store.list_executions(installation_id)
     out = []
     for row in rows:
         if filters.get("provider") and row.get("provider") != filters["provider"]:
@@ -29,7 +26,7 @@ def _filtered_executions(installation_id: str, filters: dict[str, Any]) -> list[
         if filters.get("model") and row.get("model_id") != filters["model"]:
             continue
         if filters.get("task_type"):
-            task = tasks.get(row.get("task_id"))
+            task = memory_store.tasks.get(row.get("task_id") or "")
             if (task or {}).get("task_type") != filters["task_type"] and row.get("task_type") != filters["task_type"]:
                 continue
         if filters.get("comparison_group_id") and row.get("comparison_group_id") != filters["comparison_group_id"]:
@@ -37,7 +34,7 @@ def _filtered_executions(installation_id: str, filters: dict[str, Any]) -> list[
         if filters.get("outcome") and row.get("outcome") != filters["outcome"]:
             continue
         if filters.get("rag_enabled") is True:
-            task = tasks.get(row.get("task_id"))
+            task = memory_store.tasks.get(row.get("task_id") or "")
             if not ((task or {}).get("rag_enabled") or row.get("rag_enabled")):
                 continue
         if filters.get("has_tool_calls") and int(row.get("tool_call_count") or 0) == 0:
@@ -50,41 +47,12 @@ def _filtered_executions(installation_id: str, filters: dict[str, Any]) -> list[
     return out
 
 
-class EventCache:
-    """Prefetches llm/tool events for a set of executions in two queries instead of 2N."""
-
-    def __init__(self, executions: list[dict[str, Any]]) -> None:
-        ids = [row["id"] for row in executions]
-        self._llm = store.llm_for_many(ids) if ids else {}
-        self._tools = store.tools_for_many(ids) if ids else {}
-        self._tasks = store.get_tasks_many([row.get("task_id") for row in executions]) if ids else {}
-
-    def llm_for(self, execution_id: str) -> list[dict[str, Any]]:
-        if execution_id in self._llm:
-            return self._llm[execution_id]
-        return store.llm_for(execution_id)
-
-    def tools_for(self, execution_id: str) -> list[dict[str, Any]]:
-        if execution_id in self._tools:
-            return self._tools[execution_id]
-        return store.tools_for(execution_id)
-
-    def task_for(self, execution: dict[str, Any]) -> dict[str, Any]:
-        task_id = execution.get("task_id")
-        if task_id in self._tasks:
-            return self._tasks[task_id]
-        return store.get_task(task_id) or {}
+def _task_for(execution: dict[str, Any]) -> dict[str, Any]:
+    return memory_store.tasks.get(execution.get("task_id") or "") or {}
 
 
-
-def _task_for(execution: dict[str, Any], cache: "EventCache | None" = None) -> dict[str, Any]:
-    if cache:
-        return cache.task_for(execution)
-    return store.get_task(execution.get("task_id")) or {}
-
-
-def fingerprint(execution: dict[str, Any], cache: "EventCache | None" = None) -> dict[str, Any]:
-    llm_rows = cache.llm_for(execution["id"]) if cache else store.llm_for(execution["id"])
+def fingerprint(execution: dict[str, Any]) -> dict[str, Any]:
+    llm_rows = memory_store.llm_for(execution["id"])
     input_tokens = sum(row.get("input_tokens") or 0 for row in llm_rows if row.get("input_tokens") is not None)
     output_tokens = sum(row.get("output_tokens") or 0 for row in llm_rows if row.get("output_tokens") is not None)
     cached_tokens = sum(row.get("cached_tokens") or 0 for row in llm_rows if row.get("cached_tokens") is not None)
@@ -98,11 +66,10 @@ def fingerprint(execution: dict[str, Any], cache: "EventCache | None" = None) ->
         "model_id": execution.get("model_id"),
         "display_name": model_display_name(execution.get("provider") or "", execution.get("model_id") or ""),
         "provider": execution.get("provider"),
-        "task_type": _task_for(execution, cache).get("task_type") or execution.get("task_type") or "general",
+        "task_type": _task_for(execution).get("task_type") or execution.get("task_type") or "general",
         "outcome": execution.get("outcome") or execution.get("status"),
-        "llm_calls": len(llm_rows) or (execution.get("llm_call_count") or 0),
-        "tool_calls": (len(cache.tools_for(execution["id"])) if cache else 0)
-        or (execution.get("tool_call_count") or 0),
+        "llm_calls": execution.get("llm_call_count") or 0,
+        "tool_calls": execution.get("tool_call_count") or 0,
         "files_touched": execution.get("files_touched_count") or 0,
         "rag_calls": execution.get("rag_query_count") or 0,
         "retries": execution.get("retry_count") or 0,
@@ -120,17 +87,16 @@ def fingerprint(execution: dict[str, Any], cache: "EventCache | None" = None) ->
 
 
 def execution_detail(execution_id: str) -> dict[str, Any] | None:
-    execution = store.get_execution(execution_id)
+    execution = memory_store.get_execution(execution_id)
     if not execution:
         return None
-    cache = EventCache([execution])
-    llm_rows = cache.llm_for(execution_id)
-    tool_rows = cache.tools_for(execution_id)
-    rag_rows = store.rag_for(execution_id)
-    edit_rows = store.edits_for(execution_id)
+    llm_rows = memory_store.llm_for(execution_id)
+    tool_rows = memory_store.tools_for(execution_id)
+    rag_rows = memory_store.rag_for(execution_id)
+    edit_rows = memory_store.edits_for(execution_id)
     successful_tools = [row for row in tool_rows if row.get("status") == "success"]
     latencies = [row.get("latency_ms") for row in tool_rows if row.get("latency_ms") is not None]
-    fp = fingerprint(execution, cache)
+    fp = fingerprint(execution)
     output_tokens = fp.get("output_tokens")
     edits = execution.get("edit_count") or 0
     changed = (execution.get("lines_added") or 0) + (execution.get("lines_removed") or 0)
@@ -143,7 +109,7 @@ def execution_detail(execution_id: str) -> dict[str, Any] | None:
         "tool_events": tool_rows,
         "rag_events": rag_rows,
         "edit_events": edit_rows,
-        "events": store.events_for(execution_id),
+        "events": memory_store.events_for(execution_id),
         "code_impact": {
             "files_touched": execution.get("files_touched_count") or 0,
             "files_modified": execution.get("files_modified_count") or 0,
@@ -194,9 +160,8 @@ def _context_metrics(rag_rows: list[dict[str, Any]], llm_rows: list[dict[str, An
 
 def overview(installation_id: str, filters: dict[str, Any]) -> dict[str, Any]:
     executions = _filtered_executions(installation_id, filters)
-    cache = EventCache(executions)
-    llm_rows = [row for execution in executions for row in cache.llm_for(execution["id"])]
-    tool_rows = [row for execution in executions for row in cache.tools_for(execution["id"])]
+    llm_rows = [row for execution in executions for row in memory_store.llm_for(execution["id"])]
+    tool_rows = [row for execution in executions for row in memory_store.tools_for(execution["id"])]
     durations = [row.get("duration_ms") for row in executions if row.get("duration_ms") is not None]
     costs = [row.get("estimated_cost_usd") for row in llm_rows if row.get("estimated_cost_usd") is not None]
     tokens = [row.get("total_tokens") for row in llm_rows if row.get("total_tokens") is not None]
@@ -221,15 +186,14 @@ def overview(installation_id: str, filters: dict[str, Any]) -> dict[str, Any]:
 
 def model_analytics(installation_id: str, filters: dict[str, Any]) -> list[dict[str, Any]]:
     executions = _filtered_executions(installation_id, filters)
-    cache = EventCache(executions)
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in executions:
         grouped.setdefault(f"{row.get('provider')}:{row.get('model_id')}", []).append(row)
     profiles = []
     for key, rows in grouped.items():
         provider, model_id = key.split(":", 1)
-        llm_rows = [item for execution in rows for item in cache.llm_for(execution["id"])]
-        tool_rows = [item for execution in rows for item in cache.tools_for(execution["id"])]
+        llm_rows = [item for execution in rows for item in memory_store.llm_for(execution["id"])]
+        tool_rows = [item for execution in rows for item in memory_store.tools_for(execution["id"])]
         durations = [row.get("duration_ms") for row in rows if row.get("duration_ms") is not None]
         costs = [item.get("estimated_cost_usd") for item in llm_rows if item.get("estimated_cost_usd") is not None]
         tokens = [item.get("total_tokens") for item in llm_rows if item.get("total_tokens") is not None]
@@ -257,10 +221,9 @@ def model_analytics(installation_id: str, filters: dict[str, Any]) -> list[dict[
 
 def tool_analytics(installation_id: str, filters: dict[str, Any]) -> list[dict[str, Any]]:
     executions = _filtered_executions(installation_id, filters)
-    cache = EventCache(executions)
     grouped: dict[str, list[dict[str, Any]]] = {}
     for execution in executions:
-        for row in cache.tools_for(execution["id"]):
+        for row in memory_store.tools_for(execution["id"]):
             grouped.setdefault(row["tool_name"], []).append(row)
     out = []
     for name, rows in grouped.items():
@@ -285,11 +248,9 @@ def tool_analytics(installation_id: str, filters: dict[str, Any]) -> list[dict[s
 
 def history(installation_id: str, filters: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
-    executions = _filtered_executions(installation_id, filters)
-    cache = EventCache(executions)
-    for execution in executions:
-        fp = fingerprint(execution, cache)
-        task = _task_for(execution, cache)
+    for execution in _filtered_executions(installation_id, filters):
+        fp = fingerprint(execution)
+        task = _task_for(execution)
         task_text = task.get("task_text") or execution.get("task_text") or ""
         rows.append(
             {
@@ -306,10 +267,10 @@ def history(installation_id: str, filters: dict[str, Any]) -> list[dict[str, Any
 
 
 def comparison(installation_id: str, comparison_group_id: str) -> dict[str, Any]:
-    group = store.get_comparison_group(comparison_group_id)
+    group = memory_store.comparison_groups.get(comparison_group_id)
     executions = [
         row
-        for row in store.list_executions(installation_id)
+        for row in memory_store.list_executions(installation_id)
         if row.get("comparison_group_id") == comparison_group_id
     ]
     details = []
