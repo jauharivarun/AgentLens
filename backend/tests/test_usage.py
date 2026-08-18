@@ -51,3 +51,29 @@ def test_unknown_model_cost_is_unavailable():
     cost = estimate_cost("openai", "unknown-model", usage)
     assert cost.pricing_available is False
     assert cost.estimated_cost_usd is None
+
+
+def test_cost_uses_cached_input_rate():
+    usage = NormalizedUsage(
+        input_tokens=1_000_000, cached_tokens=1_000_000, output_tokens=0, usage_available=True
+    )
+    cost = estimate_cost("openai", "gpt-4.1", usage)
+    assert cost.pricing_available is True
+    assert cost.input_cost_usd == 0.50
+
+
+def test_every_enabled_catalog_model_has_pricing():
+    import json
+    from pathlib import Path
+
+    from app.gateway.pricing import get_pricing
+
+    catalog = json.loads(
+        (Path(__file__).resolve().parents[1] / "app" / "data" / "model_catalog.json").read_text()
+    )
+    missing = [
+        f"{item['provider']}/{item['model_id']}"
+        for item in catalog
+        if item.get("enabled") and get_pricing(item["provider"], item["model_id"]) is None
+    ]
+    assert not missing, f"models without pricing: {missing}"

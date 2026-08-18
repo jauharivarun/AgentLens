@@ -77,6 +77,15 @@ export const api = {
       uploads?: { name: string; path: string; bytes: number }[];
       builtin?: { name: string; path: string; bytes: number }[];
     }>("/api/uploads"),
+  fileContent: (path: string) =>
+    request<{
+      name: string;
+      path: string;
+      bytes: number;
+      content: string;
+      truncated: boolean;
+      source: string;
+    }>(`/api/files?path=${encodeURIComponent(path)}`),
   deleteUpload: (name: string) =>
     request<{ deleted: string; path: string }>(`/api/uploads/${encodeURIComponent(name)}`, { method: "DELETE" }),
   upload: async (file: File) => {
