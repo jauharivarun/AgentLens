@@ -20,10 +20,6 @@ Model selection is UI state. The task prompt is never rewritten to mention a mod
 
 Groq is registered as a provider adapter stub and stays disabled until `GROQ_API_KEY` is set.
 
-## Phase tracker
-
-See [`docs/PHASES.md`](docs/PHASES.md) for the step-by-step implementation checklist (Phases 0–17): what is done, what is partial, and what still needs your API keys or a live run.
-
 ## Quick start
 
 ```bash
@@ -81,15 +77,22 @@ PYTHONPATH=. pytest
 
 Usage tests verify that missing provider fields stay `null` (never guessed as zero) and that unknown model prices stay `N/A`.
 
-## Deploy on Vercel
+## Deployment
 
-This repo is set up as a Vite frontend plus a Python `/api` function.
+Live at [agent-lens-psi.vercel.app](https://agent-lens-psi.vercel.app/).
 
-1. Import the GitHub repo in Vercel.
-2. Set environment variables (`OPENAI_API_KEY`, and optionally Supabase/Chroma).
-3. Deploy.
+The frontend is a static Vite build on Vercel. The FastAPI backend runs as a long-lived
+web service on Render, and Vercel rewrites `/api/*` to it, so the browser only ever talks
+to one origin.
 
-Serverless timeouts can cut long agent loops. Local `uvicorn` is the most reliable way to demo multi-step tool use.
+The agent writes files and runs pytest in a subprocess, which needs a writable filesystem
+and a process that outlives a single request. Serverless functions provide neither, so the
+backend is deliberately not on Vercel.
+
+1. Deploy the backend on Render from `render.yaml`, setting `OPENAI_API_KEY` and optionally
+   the Supabase and Chroma variables.
+2. Point the `/api/*` rewrite in [`vercel.json`](vercel.json) at that Render hostname.
+3. Import the repo in Vercel with the repository root as the root directory.
 
 ## Trust labels
 

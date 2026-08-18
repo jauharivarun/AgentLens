@@ -19,3 +19,7 @@ backend/.venv/
 sample_workspace/uploads/*
 !sample_workspace/uploads/.gitkeep
 
+# Working notes kept locally, not part of the published repo
+DEPLOY.md
+docs/
+
