@@ -1,4 +1,12 @@
-from app.agent.tools import preview_csv, run_command, run_tests
+import ast
+
+from app.agent.tools import (
+    normalize_written_content,
+    preview_csv,
+    run_command,
+    run_tests,
+    summarize_test_failure,
+)
 from app.gateway.adapters.groq_adapter import GroqAdapter
 
 
@@ -32,6 +40,39 @@ def test_run_tests_rejects_path_outside_workspace():
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_double_escaped_python_is_recovered():
+    escaped = "import re\\n\\n\\ndef slug(text):\\n    return text.lower()"
+    content, decoded = normalize_written_content(escaped, ".py")
+    assert decoded is True
+    assert len(content.splitlines()) == 5
+    ast.parse(content)
+
+
+def test_legitimate_python_one_liner_is_not_rewritten():
+    source = 'print("a\\nb")'
+    content, decoded = normalize_written_content(source, ".py")
+    assert decoded is False
+    assert content == source
+
+
+def test_normal_multiline_content_is_untouched():
+    source = "def f():\n    return 1\n"
+    content, decoded = normalize_written_content(source, ".py")
+    assert decoded is False
+    assert content == source
+
+
+def test_unparseable_content_is_left_for_the_model():
+    content, decoded = normalize_written_content("def (:\\n  ??", ".py")
+    assert decoded is False
+
+
+def test_failure_summary_only_for_nonzero_exit():
+    assert summarize_test_failure({"exit_code": 0, "stdout": "1 passed", "stderr": ""}) is None
+    summary = summarize_test_failure({"exit_code": 2, "stdout": "collected 0", "stderr": "SyntaxError"})
+    assert "SyntaxError" in summary
 
 
 def test_groq_adapter_requires_key():

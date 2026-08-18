@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import csv
 import difflib
 import io
@@ -131,12 +132,25 @@ def preview_csv(relative_path: str, rows: int = 8) -> dict[str, Any]:
     }
 
 
+TEST_FAILURE_SUMMARY_CHARS = 600
+
+
+def summarize_test_failure(result: dict[str, Any]) -> str | None:
+    if result.get("exit_code") == 0:
+        return None
+    combined = "\n".join(part for part in (result.get("stderr"), result.get("stdout")) if part).strip()
+    if not combined:
+        return None
+    return combined[-TEST_FAILURE_SUMMARY_CHARS:]
+
+
 def run_tests(path: str | None = None) -> dict[str, Any]:
     target = path.strip() if path and path.strip() else "tests"
     resolve_workspace_path(target)
     result = run_command(f"python -m pytest {shlex.quote(target)} -q")
     result["tool"] = "run_tests"
     result["target"] = target
+    result["failure_summary"] = summarize_test_failure(result)
     return result
 
 
@@ -165,13 +179,65 @@ def search_files(query: str, path: str | None = None) -> dict[str, Any]:
     return {"matches": matches, "count": len(matches), "truncated": False}
 
 
+ESCAPE_REPLACEMENTS = {
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+    '"': '"',
+    "'": "'",
+    "\\": "\\",
+}
+
+
+def _unescape_sequences(text: str) -> str:
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            replacement = ESCAPE_REPLACEMENTS.get(text[index + 1])
+            if replacement is not None:
+                out.append(replacement)
+                index += 2
+                continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _parses_as_python(text: str) -> bool:
+    try:
+        ast.parse(text)
+    except (SyntaxError, ValueError):
+        return False
+    return True
+
+
+def normalize_written_content(content: str, suffix: str) -> tuple[str, bool]:
+    """Recover file content that a model double-escaped into a single line.
+
+    Only rewrites when the escaped form cannot be the intended file: for Python
+    a one-liner containing a literal \\n may be legitimate, so the decoded form
+    is used only when it parses and the original does not.
+    """
+    if "\\n" not in content or "\n" in content:
+        return content, False
+    decoded = _unescape_sequences(content)
+    if decoded == content:
+        return content, False
+    if suffix == ".py" and (_parses_as_python(content) or not _parses_as_python(decoded)):
+        return content, False
+    return decoded, True
+
+
 def write_file(relative_path: str, content: str) -> dict[str, Any]:
     path = resolve_workspace_path(relative_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     old = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    content, decoded = normalize_written_content(content, path.suffix.lower())
     path.write_text(content, encoding="utf-8")
     added, removed = line_diff(old, content)
-    return {
+    result = {
         "path": relative_path,
         "status": "written",
         "operation": "update" if old else "write",
@@ -180,7 +246,15 @@ def write_file(relative_path: str, content: str) -> dict[str, Any]:
         "content_size_before": len(old),
         "content_size_after": len(content),
         "existed": bool(old),
+        "empty": not content,
+        "decoded_escapes": decoded,
     }
+    if not content:
+        result["warning"] = (
+            "No content was written. Resend write_file with the full file body in the "
+            "content argument, using real newlines."
+        )
+    return result
 
 
 def _command_allowed(parts: list[str]) -> bool:
@@ -283,12 +357,18 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Create or update a file in the demo workspace.",
+            "description": "Create or update a file in the demo workspace. Always send the complete file body.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "content": {"type": "string"},
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "Full file body with real line breaks. Do not escape newlines as "
+                            "literal backslash-n and do not send a placeholder."
+                        ),
+                    },
                 },
                 "required": ["path", "content"],
             },

@@ -52,6 +52,11 @@ async def _execute_tool(name: str, arguments: dict[str, Any], execution_id: str)
         result = tools.search_files(arguments.get("query", ""), arguments.get("path"))
         return result, {"count": result.get("count")}, "success"
     if name == "write_file":
+        if "content" not in arguments:
+            raise ValueError(
+                "write_file requires a 'content' argument holding the full file body, "
+                "written with real newlines."
+            )
         result = tools.write_file(arguments.get("path"), arguments.get("content", ""))
         execution = recorder.store.get_execution(execution_id)
         touched = list((execution or {}).get("files_touched") or [])
@@ -66,7 +71,14 @@ async def _execute_tool(name: str, arguments: dict[str, Any], execution_id: str)
             content_size_after=result["content_size_after"],
             is_repeat=is_repeat,
         )
-        return result, {"path": result["path"], "lines_added": result["lines_added"], "lines_removed": result["lines_removed"]}, "success"
+        write_meta = {
+            "path": result["path"],
+            "lines_added": result["lines_added"],
+            "lines_removed": result["lines_removed"],
+        }
+        if result.get("decoded_escapes"):
+            write_meta["decoded_escapes"] = True
+        return result, write_meta, "failed" if result.get("empty") else "success"
     if name == "run_command":
         result = tools.run_command(arguments.get("command", ""))
         execution = recorder.store.get_execution(execution_id)
@@ -85,7 +97,14 @@ async def _execute_tool(name: str, arguments: dict[str, Any], execution_id: str)
             execution["tests_run"] = int(execution.get("tests_run") or 0) + int(result["tests_run"])
             execution["tests_passed"] = int(execution.get("tests_passed") or 0) + int(result.get("tests_passed") or 0)
         status = "success" if result.get("exit_code") == 0 else "failed"
-        return result, {"target": result.get("target"), "exit_code": result.get("exit_code"), "tests_passed": result.get("tests_passed")}, status
+        test_meta = {
+            "target": result.get("target"),
+            "exit_code": result.get("exit_code"),
+            "tests_passed": result.get("tests_passed"),
+        }
+        if result.get("failure_summary"):
+            test_meta["failure_summary"] = result["failure_summary"]
+        return result, test_meta, status
     if name == "rag_search":
         result = await rag_search_service(arguments.get("query", ""), int(arguments.get("top_k") or 4))
         await recorder.record_rag_event(
