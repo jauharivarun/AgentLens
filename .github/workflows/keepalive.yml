@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: Ping health endpoint
         env:
-          BACKEND_URL: https://agentlens-api.onrender.com
+          BACKEND_URL: https://agentlens-api-58vp.onrender.com
         run: |
           code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "$BACKEND_URL/api/health")
           echo "health check returned $code"
