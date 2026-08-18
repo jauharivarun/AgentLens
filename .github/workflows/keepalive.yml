@@ -1,0 +1,29 @@
+# Render's free tier spins a service down after 15 minutes without traffic, and waking
+# it takes about a minute. A reviewer opening the demo link should not sit through that,
+# so ping the health endpoint every 10 minutes.
+#
+# Caveats:
+#   - GitHub disables scheduled workflows after 60 days of repository inactivity.
+#   - Scheduled runs are best-effort and can be delayed under load.
+#   - If either matters, use a free external pinger (cron-job.org) instead.
+#
+# Update BACKEND_URL below if your Render service name differs.
+
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        env:
+          BACKEND_URL: https://agentlens-api.onrender.com
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "$BACKEND_URL/api/health")
+          echo "health check returned $code"
+          test "$code" = "200"

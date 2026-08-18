@@ -18,4 +18,7 @@ htmlcov/
 backend/.venv/
 sample_workspace/uploads/*
 !sample_workspace/uploads/.gitkeep
+# Demo fixture: compute_metrics.py and src/analyze.py hardcode this path,
+# so it must exist on a fresh deploy or those demos fail.
+!sample_workspace/uploads/2025_sales_transactions.csv
 

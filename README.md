@@ -10,7 +10,7 @@ Model selection is UI state. The task prompt is never rewritten to mention a mod
 
 - React / Vite / TypeScript frontend
 - FastAPI backend
-- OpenAI as the live LLM provider (`gpt-4o-mini`, `gpt-4o`)
+- OpenAI and Groq as live LLM providers
 - LLM Gateway that captures provider usage and estimates cost
 - Workspace tools: list/read/search/write files and allowlisted Python commands
 - RAG over `sample_workspace/knowledge` (Chroma Cloud when configured, local fallback otherwise)
@@ -18,11 +18,7 @@ Model selection is UI state. The task prompt is never rewritten to mention a mod
 - Manual same-task comparison groups
 - Execution fingerprints and an observability dashboard
 
-Groq is registered as a provider adapter stub and stays disabled until `GROQ_API_KEY` is set.
-
-## Phase tracker
-
-See [`docs/PHASES.md`](docs/PHASES.md) for the step-by-step implementation checklist (Phases 0–17): what is done, what is partial, and what still needs your API keys or a live run.
+Groq runs through the same adapter path and appears in the dropdown once `GROQ_API_KEY` is set.
 
 ## Quick start
 
@@ -55,7 +51,7 @@ Open [http://localhost:5173](http://localhost:5173).
 | `OPENAI_API_KEY` | Live agent runs | Server-side only |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Persistent telemetry | Optional; in-memory fallback is used without it |
 | `CHROMA_API_KEY` / `CHROMA_TENANT` / `CHROMA_DATABASE` | Hosted RAG | Optional; local keyword/embedding fallback is used without it |
-| `GROQ_API_KEY` | Future Groq adapter | Unused in this MVP |
+| `GROQ_API_KEY` | Groq models in the dropdown | Server-side only |
 
 Never put provider keys in the frontend. The browser only receives public model catalog fields.
 
@@ -81,15 +77,16 @@ PYTHONPATH=. pytest
 
 Usage tests verify that missing provider fields stay `null` (never guessed as zero) and that unknown model prices stay `N/A`.
 
-## Deploy on Vercel
+## Deploy
 
-This repo is set up as a Vite frontend plus a Python `/api` function.
+The app is served from one Vercel URL: Vercel hosts the built frontend and rewrites `/api/*` to a
+FastAPI backend on Render.
 
-1. Import the GitHub repo in Vercel.
-2. Set environment variables (`OPENAI_API_KEY`, and optionally Supabase/Chroma).
-3. Deploy.
+The backend does not run on Vercel because an agent run is a background task that the browser polls,
+and serverless functions are frozen as soon as they return a response — the run would never finish.
+The read-only serverless filesystem also breaks uploads, `write_file`, and `run_tests`.
 
-Serverless timeouts can cut long agent loops. Local `uvicorn` is the most reliable way to demo multi-step tool use.
+See [`DEPLOY.md`](DEPLOY.md) for the full sequence and the free-tier limits.
 
 ## Trust labels
 

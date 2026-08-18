@@ -1,0 +1,51 @@
+# Render Blueprint for the AgentLens backend.
+#
+# The frontend deploys separately to Vercel, which proxies /api/* here via a rewrite
+# in vercel.json. See DEPLOY.md for the full sequence.
+#
+# Free tier notes:
+#   - 750 instance-hours/month. A keep-alive cron holding this awake 24/7 uses ~730,
+#     so this should be the only free service in the workspace.
+#   - Spins down after 15 minutes idle (~1 minute to wake) unless kept warm.
+#   - Ephemeral filesystem: uploads written to sample_workspace/uploads are lost on
+#     redeploy, restart, or spin-down.
+#   - Single instance, single worker. agent/control.py keeps the run registry in
+#     process memory, so runs must be polled from the same process that started them.
+
+services:
+  - type: web
+    name: agentlens-api
+    runtime: python
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd backend && PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      # The local .venv runs 3.14; pin to a version Render offers. Source needs 3.10+
+      # (PEP 604 unions in runtime positions in gateway/types.py, gateway/pricing.py,
+      # catalog.py).
+      - key: PYTHON_VERSION
+        value: "3.12"
+
+      # Secrets: sync:false makes Render prompt for these instead of storing them in git.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CHROMA_API_KEY
+        sync: false
+      - key: CHROMA_TENANT
+        sync: false
+      - key: CHROMA_DATABASE
+        sync: false
+
+      # Requests arrive same-origin through the Vercel rewrite, so no preflight happens
+      # in normal use. This only matters when hitting the Render URL directly to debug.
+      - key: CORS_ORIGINS
+        sync: false
