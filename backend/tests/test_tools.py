@@ -26,6 +26,20 @@ def test_preview_csv_returns_headers_and_rows():
     assert result["row_count"] >= 3
 
 
+def test_preview_csv_resolves_bare_filename():
+    result = preview_csv("sales.csv", rows=3)
+    assert result["path"] == "data/sales.csv"
+    assert len(result["rows"]) == 3
+
+
+def test_preview_csv_missing_file_lists_alternatives():
+    try:
+        preview_csv("nope.csv")
+        assert False, "expected FileNotFoundError"
+    except FileNotFoundError as exc:
+        assert "data/sales.csv" in str(exc)
+
+
 def test_preview_csv_rejects_non_csv():
     try:
         preview_csv("src/report.py")

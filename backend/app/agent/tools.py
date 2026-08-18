@@ -107,12 +107,40 @@ def read_file(relative_path: str, start_line: int | None = None, end_line: int |
     }
 
 
-def preview_csv(relative_path: str, rows: int = 8) -> dict[str, Any]:
+def workspace_csv_files() -> list[Path]:
+    root = workspace_root()
+    return sorted((item for item in root.rglob("*.csv") if item.is_file()), key=lambda item: item.as_posix())
+
+
+def resolve_csv_path(relative_path: str) -> Path:
+    """Locate a CSV, tolerating a bare filename when it identifies one file.
+
+    Models routinely pass the name shown in the UI rather than the path it sits
+    at, so an exact miss falls back to a unique basename match. Anything still
+    unresolved reports the available CSVs so the caller can correct itself.
+    """
     path = resolve_workspace_path(relative_path)
-    if path.suffix.lower() != ".csv":
+    if path.is_file():
+        return path
+    candidates = workspace_csv_files()
+    matches = [item for item in candidates if item.name == Path(relative_path).name]
+    if len(matches) == 1:
+        return matches[0]
+    root = workspace_root()
+    if len(matches) > 1:
+        options = ", ".join(item.relative_to(root).as_posix() for item in matches)
+        raise FileNotFoundError(f"{relative_path} matches more than one file: {options}")
+    if not candidates:
+        raise FileNotFoundError(f"{relative_path} not found. The workspace has no CSV files.")
+    options = ", ".join(item.relative_to(root).as_posix() for item in candidates[:10])
+    raise FileNotFoundError(f"{relative_path} not found. CSV files in the workspace: {options}")
+
+
+def preview_csv(relative_path: str, rows: int = 8) -> dict[str, Any]:
+    if Path(relative_path or "").suffix.lower() != ".csv":
         raise ValueError("preview_csv only accepts .csv files")
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(relative_path)
+    path = resolve_csv_path(relative_path)
+    relative_path = path.relative_to(workspace_root()).as_posix()
     limit = max(1, min(int(rows or 8), 30))
     text = path.read_text(encoding="utf-8", errors="replace")
     reader = csv.reader(io.StringIO(text))
@@ -394,7 +422,10 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative path to a .csv file"},
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path to a .csv file, such as data/sales.csv or uploads/report.csv",
+                    },
                     "rows": {"type": "integer", "description": "How many data rows to return (1-30, default 8)"},
                 },
                 "required": ["path"],

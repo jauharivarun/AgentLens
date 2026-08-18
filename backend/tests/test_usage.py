@@ -1,6 +1,11 @@
+import json
+from pathlib import Path
+
 from app.gateway.adapters.openai_adapter import normalize_openai_usage
-from app.gateway.pricing import estimate_cost
+from app.gateway.pricing import estimate_cost, get_pricing
 from app.gateway.types import NormalizedUsage
+
+CATALOG_PATH = Path(__file__).resolve().parents[1] / "app" / "data" / "model_catalog.json"
 
 
 def test_usage_maps_openai_fields():
@@ -44,6 +49,16 @@ def test_cost_from_configured_pricing():
     assert cost.input_cost_usd == 0.15
     assert cost.output_cost_usd == 0.60
     assert abs((cost.estimated_cost_usd or 0) - 0.75) < 1e-9
+
+
+def test_every_enabled_model_has_pricing():
+    catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    unpriced = [
+        f"{item['provider']}/{item['model_id']}"
+        for item in catalog
+        if item.get("enabled") and get_pricing(item["provider"], item["model_id"]) is None
+    ]
+    assert not unpriced, f"enabled models without pricing show cost as N/A: {unpriced}"
 
 
 def test_unknown_model_cost_is_unavailable():
