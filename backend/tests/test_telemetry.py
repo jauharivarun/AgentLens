@@ -98,6 +98,23 @@ def test_history_includes_prompt_and_answer():
     assert rows[0]["model"] == "Groq / GPT-OSS 20B"
 
 
+def test_fingerprint_carries_prompt_for_chat_restore():
+    """The Agent page rebuilds a chat from /executions/{id}/events, so the prompt has to ride along."""
+    from app.telemetry.analytics import fingerprint
+
+    store = memory_store
+    store.executions.clear()
+    store.tasks.clear()
+    store.tasks["t3"] = {"id": "t3", "task_text": "Which region led revenue?", "task_type": "rag"}
+    execution = {"id": "e3", "provider": "openai", "model_id": "gpt-4o-mini", "task_id": "t3", "status": "completed"}
+
+    result = fingerprint(execution)
+
+    assert result["task_text"] == "Which region led revenue?"
+    assert result["task_preview"] == "Which region led revenue?"
+    assert result["task_type"] == "rag"
+
+
 def test_groq_model_label_hides_openai_slug():
     from app.catalog import model_label
 

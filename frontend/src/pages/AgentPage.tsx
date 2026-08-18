@@ -14,7 +14,15 @@ type ChatSession = {
   turns: AgentTurnData[];
 };
 
-type StoredChat = { id: string; title: string; named?: boolean; executionIds: string[] };
+type StoredTurn = { id: string; prompt?: string };
+
+/** `executionIds` is the older shape, kept so existing chats survive the upgrade. */
+type StoredChat = { id: string; title: string; named?: boolean; turns?: StoredTurn[]; executionIds?: string[] };
+
+function storedTurns(chat: StoredChat): StoredTurn[] {
+  if (Array.isArray(chat.turns)) return chat.turns.filter((turn) => turn && turn.id);
+  return (chat.executionIds || []).map((id) => ({ id }));
+}
 
 function createChat(): ChatSession {
   return { id: crypto.randomUUID(), title: "New chat", turns: [] };
@@ -92,7 +100,7 @@ export function AgentPage() {
           id: chat.id,
           title: displayTitle(chat),
           named: Boolean(chat.named),
-          executionIds: chat.turns.map((turn) => turn.executionId),
+          turns: chat.turns.map((turn) => ({ id: turn.executionId, prompt: turn.prompt })),
         })),
     };
     if (!payload.chats.length) {
@@ -117,12 +125,17 @@ export function AgentPage() {
 
     const stored = loadStoredChats();
 
-    async function hydrateTurn(id: string, fallback?: AgentTurnData): Promise<AgentTurnData | null> {
+    async function hydrateTurn(id: string, fallback?: AgentTurnData, promptHint?: string): Promise<AgentTurnData | null> {
       try {
         const detail = await api.events(id);
         return {
           executionId: id,
-          prompt: fallback?.prompt || detail.fingerprint?.task_text || detail.fingerprint?.task_preview || "Task",
+          prompt:
+            fallback?.prompt ||
+            promptHint ||
+            detail.fingerprint?.task_text ||
+            detail.fingerprint?.task_preview ||
+            "Task",
           status: detail.status || fallback?.status || "completed",
           events: detail.events,
           finalOutput: detail.final_output ?? fallback?.finalOutput ?? null,
@@ -139,9 +152,9 @@ export function AgentPage() {
         const restored: ChatSession[] = [];
         if (stored) {
           for (const item of stored.chats) {
-            const loaded = (await Promise.all(item.executionIds.map((id) => hydrateTurn(id)))).filter(
-              (turn): turn is AgentTurnData => Boolean(turn),
-            );
+            const loaded = (
+              await Promise.all(storedTurns(item).map((turn) => hydrateTurn(turn.id, undefined, turn.prompt)))
+            ).filter((turn): turn is AgentTurnData => Boolean(turn));
             if (!loaded.length) continue;
             restored.push({
             id: item.id,
@@ -340,6 +353,17 @@ export function AgentPage() {
     setRenamingId(null);
   }
 
+  function deleteChat(chat: ChatSession) {
+    if (chat.turns.length && !window.confirm(`Delete "${displayTitle(chat)}"? The runs stay in Observability.`)) return;
+    const remaining = chats.filter((item) => item.id !== chat.id);
+    const next = remaining.length ? remaining : [createChat()];
+    setChats(next);
+    if (chat.id === activeChatId) setActiveChatId(next[0].id);
+    setRenamingId(null);
+    setStopping(false);
+    setError(null);
+  }
+
   function startRename(chat: ChatSession) {
     setRenamingId(chat.id);
     setRenameDraft(displayTitle(chat));
@@ -430,13 +454,22 @@ export function AgentPage() {
                     <div className="text-[11px] text-[var(--muted)]">
                       {chat.turns.length ? `${chat.turns.length} run${chat.turns.length === 1 ? "" : "s"}` : "Empty"}
                     </div>
-                    <button
-                      type="button"
-                      className="text-[11px] text-[var(--accent-2)] hover:text-white"
-                      onClick={() => startRename(chat)}
-                    >
-                      Rename
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="text-[11px] text-[var(--accent-2)] hover:text-white"
+                        onClick={() => startRename(chat)}
+                      >
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        className="text-[11px] text-[var(--muted)] hover:text-[var(--error)]"
+                        onClick={() => deleteChat(chat)}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}

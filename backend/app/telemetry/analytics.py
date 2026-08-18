@@ -92,13 +92,17 @@ def fingerprint(execution: dict[str, Any], cache: "EventCache | None" = None) ->
     usage_available = any(row.get("usage_available") for row in llm_rows)
     cost_values = [row.get("estimated_cost_usd") for row in llm_rows if row.get("estimated_cost_usd") is not None]
     priced = [row for row in llm_rows if row.get("estimated_cost_usd") is not None]
+    task = _task_for(execution, cache)
+    task_text = task.get("task_text") or execution.get("task_text") or ""
     return {
         "execution_id": execution["id"],
         "model": model_label(execution.get("provider") or "", execution.get("model_id") or ""),
         "model_id": execution.get("model_id"),
         "display_name": model_display_name(execution.get("provider") or "", execution.get("model_id") or ""),
         "provider": execution.get("provider"),
-        "task_type": _task_for(execution, cache).get("task_type") or execution.get("task_type") or "general",
+        "task_type": task.get("task_type") or execution.get("task_type") or "general",
+        "task_text": task_text,
+        "task_preview": task_text[:140],
         "outcome": execution.get("outcome") or execution.get("status"),
         "llm_calls": len(llm_rows) or (execution.get("llm_call_count") or 0),
         "tool_calls": (len(cache.tools_for(execution["id"])) if cache else 0)
@@ -290,13 +294,10 @@ def history(installation_id: str, filters: dict[str, Any]) -> list[dict[str, Any
     for execution in executions:
         fp = fingerprint(execution, cache)
         task = _task_for(execution, cache)
-        task_text = task.get("task_text") or execution.get("task_text") or ""
         rows.append(
             {
                 **fp,
                 "started_at": execution.get("started_at"),
-                "task_preview": task_text[:140],
-                "task_text": task_text,
                 "final_output": execution.get("final_output"),
                 "comparison_group_id": execution.get("comparison_group_id"),
                 "rag_enabled": bool(task.get("rag_enabled") or execution.get("rag_enabled")),
