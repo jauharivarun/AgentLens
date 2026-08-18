@@ -26,6 +26,17 @@ def test_preview_csv_returns_headers_and_rows():
     assert result["row_count"] >= 3
 
 
+def test_python_module_allowlist_blocks_non_test_modules():
+    import shlex
+
+    from app.agent.tools import _command_allowed
+
+    assert _command_allowed(shlex.split("python -m pytest tests")) is True
+    assert _command_allowed(shlex.split("python -m unittest")) is True
+    for command in ("python -m pip install requests", "python -m http.server 8000", "python -m venv /tmp/x"):
+        assert _command_allowed(shlex.split(command)) is False, command
+
+
 def test_preview_csv_resolves_bare_filename():
     result = preview_csv("sales.csv", rows=3)
     assert result["path"] == "data/sales.csv"

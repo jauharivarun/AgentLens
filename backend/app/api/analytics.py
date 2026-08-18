@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
+from ..telemetry import store
 from ..telemetry.analytics import comparison, history, model_analytics, overview, tool_analytics
 from ..telemetry.recorder import recorder
 
@@ -138,4 +139,4 @@ async def create_group(
 @router.get("/api/comparison-groups")
 async def list_groups(x_installation_id: str | None = Header(default=None)) -> dict[str, Any]:
     installation_id = _installation(x_installation_id)
-    return {"groups": recorder.store.list_comparison_groups(installation_id)}
+    return {"groups": store.list_comparison_groups(installation_id)}

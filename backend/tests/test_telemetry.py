@@ -153,3 +153,35 @@ def test_recorder_does_not_crash_without_supabase():
         assert completed["status"] == "completed"
 
     asyncio.run(_run())
+
+
+def test_store_falls_back_to_memory_without_supabase(monkeypatch):
+    """A clone with no Supabase credentials must behave exactly as before."""
+    from app.telemetry import store, supabase_store
+    from app.telemetry.memory import memory_store
+
+    monkeypatch.setattr(supabase_store, "get_supabase", lambda: None)
+    memory_store.insert_execution(
+        {"id": "fallback-exec", "installation_id": "fallback-install", "started_at": "2026-01-01T00:00:00+00:00", "task_id": "fallback-task"}
+    )
+    memory_store.insert_task({"id": "fallback-task", "task_text": "local", "task_type": "general"})
+    memory_store.append_llm({"id": "fallback-llm", "execution_id": "fallback-exec", "total_tokens": 15})
+
+    assert [row["id"] for row in store.list_executions("fallback-install")] == ["fallback-exec"]
+    assert len(store.llm_for("fallback-exec")) == 1
+    assert store.llm_for_many(["fallback-exec"])["fallback-exec"][0]["id"] == "fallback-llm"
+    assert store.get_task("fallback-task")["task_text"] == "local"
+    assert store.get_execution("fallback-exec") is not None
+
+
+def test_completion_persists_live_counters():
+    """Counters accumulate on the memory row; the Supabase patch must carry them too."""
+    from app.telemetry.recorder import _summary_patch
+
+    execution = {"llm_call_count": 3, "tool_call_count": 7, "estimated_cost_usd": 0.0042, "lines_added": 12}
+    patch = _summary_patch(execution)
+    assert patch["llm_call_count"] == 3
+    assert patch["tool_call_count"] == 7
+    assert patch["estimated_cost_usd"] == 0.0042
+    assert patch["lines_added"] == 12
+    assert "status" not in patch
