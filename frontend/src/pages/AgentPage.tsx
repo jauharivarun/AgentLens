@@ -1,14 +1,35 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import { AgentTurn, type AgentTurnData } from "../components/AgentTurn";
+import { KnowledgeFilesPanel } from "../components/KnowledgeFilesPanel";
 import { formatProvider } from "../lib/format";
 import type { HistoryRow, ModelOption } from "../types";
 
-const EXAMPLES = [
-  "Explain the architecture of the sample workspace and identify the main execution path.",
-  "Create a Python utility that reads sales.csv and produces a summary report.",
-  "From the knowledge base, summarize the sustainability reporting requirements and cite the source documents.",
-];
+const CHAT_STORAGE_KEY = "agentlens.chats";
+
+type ChatSession = {
+  id: string;
+  title: string;
+  named?: boolean;
+  turns: AgentTurnData[];
+};
+
+type StoredChat = { id: string; title: string; named?: boolean; executionIds: string[] };
+
+function createChat(): ChatSession {
+  return { id: crypto.randomUUID(), title: "New chat", turns: [] };
+}
+
+function displayTitle(chat: Pick<ChatSession, "title" | "named" | "turns">): string {
+  if (chat.named && chat.title.trim()) return chat.title.trim();
+  return titleFromTurns(chat.turns, chat.title);
+}
+
+function titleFromTurns(turns: AgentTurnData[], fallback = "New chat"): string {
+  const prompt = turns[0]?.prompt?.trim();
+  if (!prompt) return fallback;
+  return prompt.length > 56 ? `${prompt.slice(0, 56)}…` : prompt;
+}
 
 function fromHistory(row: HistoryRow): AgentTurnData {
   return {
@@ -22,23 +43,64 @@ function fromHistory(row: HistoryRow): AgentTurnData {
   };
 }
 
+function loadStoredChats(): { chats: StoredChat[]; activeChatId: string } | null {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { chats?: StoredChat[]; activeChatId?: string };
+    if (!Array.isArray(parsed.chats) || !parsed.chats.length) return null;
+    return { chats: parsed.chats, activeChatId: parsed.activeChatId || parsed.chats[0].id };
+  } catch {
+    return null;
+  }
+}
+
 export function AgentPage() {
+  const bootstrap = useMemo(() => createChat(), []);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [task, setTask] = useState("");
   const [modelId, setModelId] = useState("");
   const [ragEnabled, setRagEnabled] = useState(false);
-  const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [executionId, setExecutionId] = useState<string | null>(null);
-  const [turns, setTurns] = useState<AgentTurnData[]>([]);
+  const [chats, setChats] = useState<ChatSession[]>([bootstrap]);
+  const [activeChatId, setActiveChatId] = useState(bootstrap.id);
+  const [chatsReady, setChatsReady] = useState(false);
   const [health, setHealth] = useState<{ openai_configured?: boolean; groq_configured?: boolean } | null>(null);
   const [uploads, setUploads] = useState<{ name: string; path: string; bytes: number }[]>([]);
+  const [builtin, setBuiltin] = useState<{ name: string; path: string; bytes: number }[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   const selected = useMemo(() => models.find((item) => `${item.provider}:${item.model_id}` === modelId), [models, modelId]);
+  const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
+  const turns = activeChat?.turns ?? [];
+  const liveTurn = turns.find((turn) => turn.status === "running" || turn.status === "queued");
+  const running = Boolean(liveTurn);
+  const listedChats = chats.filter((chat) => chat.turns.length || chat.id === activeChatId);
+
+  useEffect(() => {
+    if (!chatsReady) return;
+    const payload = {
+      activeChatId,
+      chats: chats
+        .filter((chat) => chat.turns.length)
+        .map((chat) => ({
+          id: chat.id,
+          title: displayTitle(chat),
+          named: Boolean(chat.named),
+          executionIds: chat.turns.map((turn) => turn.executionId),
+        })),
+    };
+    if (!payload.chats.length) {
+      localStorage.removeItem(CHAT_STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(payload));
+  }, [chats, activeChatId, chatsReady]);
 
   useEffect(() => {
     api.models().then((data) => {
@@ -46,80 +108,139 @@ export function AgentPage() {
       if (data.models[0]) setModelId(`${data.models[0].provider}:${data.models[0].model_id}`);
     }).catch((err) => setError(err.message));
     api.health().then(setHealth).catch(() => undefined);
-    api.uploads().then((data) => setUploads(data.files)).catch(() => undefined);
-    api.history("").then(async (data) => {
-      const loaded = data.executions.slice(0, 20).reverse().map(fromHistory);
-      setTurns((current) => {
-        if (!current.length) return loaded;
-        const existing = new Set(current.map((turn) => turn.executionId));
-        return [...loaded.filter((turn) => !existing.has(turn.executionId)), ...current];
-      });
-      const live = data.executions.find((row) => row.status === "running" || row.status === "queued");
-      if (live) {
-        setExecutionId((current) => current ?? live.execution_id);
-        setRunning(true);
+    api.uploads()
+      .then((data) => {
+        setUploads(data.uploads || data.files);
+        setBuiltin(data.builtin || []);
+      })
+      .catch(() => undefined);
+
+    const stored = loadStoredChats();
+
+    async function hydrateTurn(id: string, fallback?: AgentTurnData): Promise<AgentTurnData | null> {
+      try {
+        const detail = await api.events(id);
+        return {
+          executionId: id,
+          prompt: fallback?.prompt || detail.fingerprint?.task_text || detail.fingerprint?.task_preview || "Task",
+          status: detail.status || fallback?.status || "completed",
+          events: detail.events,
+          finalOutput: detail.final_output ?? fallback?.finalOutput ?? null,
+          fingerprint: detail.fingerprint || fallback?.fingerprint || null,
+          startedAt: fallback?.startedAt,
+        };
+      } catch {
+        return fallback ?? null;
       }
-      const withEvents = await Promise.all(
-        loaded.map(async (turn) => {
-          try {
-            const detail = await api.events(turn.executionId);
-            return {
-              ...turn,
-              status: detail.status || turn.status,
-              events: detail.events,
-              finalOutput: detail.final_output ?? turn.finalOutput,
-              fingerprint: detail.fingerprint || turn.fingerprint,
-            };
-          } catch {
-            return turn;
+    }
+
+    (async () => {
+      try {
+        const restored: ChatSession[] = [];
+        if (stored) {
+          for (const item of stored.chats) {
+            const loaded = (await Promise.all(item.executionIds.map((id) => hydrateTurn(id)))).filter(
+              (turn): turn is AgentTurnData => Boolean(turn),
+            );
+            if (!loaded.length) continue;
+            restored.push({
+            id: item.id,
+            title: item.title || titleFromTurns(loaded),
+            named: Boolean(item.named && item.title),
+            turns: loaded,
+          });
           }
-        }),
-      );
-      setTurns((current) => {
-        const byId = new Map(withEvents.map((turn) => [turn.executionId, turn]));
-        return current.map((turn) => {
-          const fresh = byId.get(turn.executionId);
-          if (!fresh) return turn;
-          return turn.events.length ? turn : fresh;
+        }
+
+        let live: HistoryRow | undefined;
+        try {
+          const history = await api.history("");
+          live = history.executions.find((row) => row.status === "running" || row.status === "queued");
+        } catch {
+          live = undefined;
+        }
+
+        setChats((current) => {
+          if (current.some((chat) => chat.turns.length)) return current;
+          if (restored.length) {
+            const hasLive = live && restored.some((chat) => chat.turns.some((turn) => turn.executionId === live.execution_id));
+            if (live && !hasLive) {
+              return [{ id: restored[0].id, title: restored[0].title, turns: [fromHistory(live), ...restored[0].turns] }, ...restored.slice(1)];
+            }
+            return restored;
+          }
+          if (live) {
+            return [{ ...current[0], title: titleFromTurns([fromHistory(live)]), turns: [fromHistory(live)] }];
+          }
+          return current;
         });
-      });
-    }).catch(() => undefined);
+        if (stored?.activeChatId) {
+          setActiveChatId((current) => {
+            if (restored.some((chat) => chat.id === stored.activeChatId)) return stored.activeChatId;
+            return restored[0]?.id || current;
+          });
+        }
+        if (live) {
+          const detail = await hydrateTurn(live.execution_id, fromHistory(live));
+          if (detail) {
+            setChats((current) =>
+              current.map((chat) => ({
+                ...chat,
+                turns: chat.turns.map((turn) => (turn.executionId === live.execution_id ? detail : turn)),
+              })),
+            );
+          }
+        }
+      } finally {
+        setChatsReady(true);
+      }
+    })();
   }, []);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [turns.length, executionId]);
+  }, [turns.length, liveTurn?.executionId]);
+
+  const liveIds = useMemo(
+    () =>
+      chats
+        .flatMap((chat) => chat.turns)
+        .filter((turn) => turn.status === "running" || turn.status === "queued")
+        .map((turn) => turn.executionId),
+    [chats],
+  );
+  const liveKey = liveIds.join(",");
 
   useEffect(() => {
-    if (!executionId) return;
+    if (!liveKey) return;
+    const ids = liveKey.split(",");
     let cancelled = false;
     const poll = async () => {
       try {
-        const data = await api.events(executionId);
+        const updates = await Promise.all(ids.map((id) => api.events(id)));
         if (cancelled) return;
-        setTurns((current) =>
-          current.map((turn) =>
-            turn.executionId === executionId
-              ? {
-                  ...turn,
-                  status: data.status,
-                  events: data.events,
-                  finalOutput: data.final_output,
-                  fingerprint: data.fingerprint,
-                }
-              : turn,
-          ),
+        setChats((current) =>
+          current.map((chat) => ({
+            ...chat,
+            turns: chat.turns.map((turn) => {
+              const data = updates.find((_, index) => ids[index] === turn.executionId);
+              if (!data) return turn;
+              return {
+                ...turn,
+                status: data.status,
+                events: data.events,
+                finalOutput: data.final_output,
+                fingerprint: data.fingerprint,
+              };
+            }),
+          })),
         );
-        if (data.status === "running" || data.status === "queued") {
-          window.setTimeout(poll, 900);
-        } else {
-          setRunning(false);
-          setStopping(false);
-        }
+        const stillLive = updates.some((data) => data.status === "running" || data.status === "queued");
+        if (stillLive) window.setTimeout(poll, 900);
+        else setStopping(false);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Polling failed");
-          setRunning(false);
           setStopping(false);
         }
       }
@@ -128,14 +249,13 @@ export function AgentPage() {
     return () => {
       cancelled = true;
     };
-  }, [executionId]);
+  }, [liveKey]);
 
   async function onRun(event: FormEvent) {
     event.preventDefault();
     if (!selected || !task.trim()) return;
     const prompt = task.trim();
     setError(null);
-    setRunning(true);
     try {
       const result = await api.startExecution({
         task: prompt,
@@ -145,41 +265,45 @@ export function AgentPage() {
         rag_enabled: ragEnabled,
         workspace_id: "demo-workspace",
       });
-      setTurns((current) => [
-        ...current.filter((turn) => turn.executionId !== result.execution_id),
-        {
-          executionId: result.execution_id,
-          prompt,
-          status: "running",
-          events: [],
-          finalOutput: null,
-          fingerprint: null,
-          startedAt: new Date().toISOString(),
-        },
-      ]);
-      setExecutionId(result.execution_id);
+      const nextTurn: AgentTurnData = {
+        executionId: result.execution_id,
+        prompt,
+        status: "running",
+        events: [],
+        finalOutput: null,
+        fingerprint: null,
+        startedAt: new Date().toISOString(),
+      };
+      setChats((current) =>
+        current.map((chat) => {
+          if (chat.id !== activeChatId) return chat;
+          const turnsNext = [...chat.turns.filter((turn) => turn.executionId !== result.execution_id), nextTurn];
+          return { ...chat, title: chat.named ? chat.title : titleFromTurns(turnsNext, chat.title), turns: turnsNext };
+        }),
+      );
       setTask("");
     } catch (err) {
-      setRunning(false);
       setError(err instanceof Error ? err.message : "Failed to start execution");
     }
   }
 
   async function onStop() {
-    if (!executionId || stopping) return;
+    if (!liveTurn || stopping) return;
     setStopping(true);
     setError(null);
     try {
-      await api.stopExecution(executionId);
+      await api.stopExecution(liveTurn.executionId);
     } catch {
-      setTurns((current) =>
-        current.map((turn) =>
-          turn.executionId === executionId
-            ? { ...turn, status: "cancelled", finalOutput: turn.finalOutput || "Stopped by user." }
-            : turn,
-        ),
+      setChats((current) =>
+        current.map((chat) => ({
+          ...chat,
+          turns: chat.turns.map((turn) =>
+            turn.executionId === liveTurn.executionId
+              ? { ...turn, status: "cancelled", finalOutput: turn.finalOutput || "Stopped by user." }
+              : turn,
+          ),
+        })),
       );
-      setRunning(false);
       setStopping(false);
     }
   }
@@ -190,71 +314,131 @@ export function AgentPage() {
     composerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
+  function onNewChat() {
+    if (!turns.length && !task && !error) return;
+    const next = createChat();
+    setChats((current) => {
+      const saved = current.map((chat) =>
+        chat.id === activeChatId
+          ? { ...chat, title: chat.named ? chat.title : titleFromTurns(chat.turns, chat.title) }
+          : chat,
+      );
+      if (!turns.length) return saved;
+      return [next, ...saved.filter((chat) => chat.turns.length || chat.id === activeChatId)];
+    });
+    if (turns.length) setActiveChatId(next.id);
+    setStopping(false);
+    setError(null);
+    setTask("");
+    composerRef.current?.focus();
+  }
+
+  function openChat(id: string) {
+    setActiveChatId(id);
+    setError(null);
+    setStopping(false);
+    setRenamingId(null);
+  }
+
+  function startRename(chat: ChatSession) {
+    setRenamingId(chat.id);
+    setRenameDraft(displayTitle(chat));
+  }
+
+  function commitRename(id: string) {
+    const next = renameDraft.trim();
+    setChats((current) =>
+      current.map((chat) => {
+        if (chat.id !== id) return chat;
+        if (!next) return { ...chat, named: false, title: titleFromTurns(chat.turns, "New chat") };
+        return { ...chat, named: true, title: next };
+      }),
+    );
+    setRenamingId(null);
+  }
+
   async function loadTrace(id: string) {
     try {
       const data = await api.events(id);
-      setTurns((current) =>
-        current.map((turn) =>
-          turn.executionId === id
-            ? { ...turn, events: data.events, finalOutput: data.final_output ?? turn.finalOutput, fingerprint: data.fingerprint }
-            : turn,
-        ),
+      setChats((current) =>
+        current.map((chat) => ({
+          ...chat,
+          turns: chat.turns.map((turn) =>
+            turn.executionId === id
+              ? { ...turn, events: data.events, finalOutput: data.final_output ?? turn.finalOutput, fingerprint: data.fingerprint }
+              : turn,
+          ),
+        })),
       );
     } catch {
       setError("Could not load execution steps.");
     }
   }
 
-  const recent = [...turns].reverse().slice(0, 8);
-
   return (
     <div className="grid min-h-[calc(100vh-61px)] grid-cols-1 lg:grid-cols-[minmax(0,260px)_minmax(0,1fr)]">
       <aside className="min-w-0 overflow-hidden border-b border-[var(--border)] bg-[var(--panel)] p-4 lg:border-b-0 lg:border-r">
-        <div className="text-xs uppercase tracking-wide text-[var(--muted)]">Workspace</div>
-        <div className="mt-2 text-sm">Demo repo</div>
-        <div className="mono mt-1 truncate text-xs text-[var(--muted)]">sample_workspace</div>
-        <ul className="mt-4 min-w-0 space-y-1 text-sm text-[var(--muted)]">
-          <li>data/sales.csv</li>
-          <li>src/report.py</li>
-          <li>tests/test_report.py</li>
-          <li>knowledge/*.md</li>
-          {uploads.map((file) => (
-            <li key={file.path} className="truncate" title={`uploads/${file.name}`}>
-              uploads/{file.name}
-            </li>
-          ))}
-        </ul>
-        <div className="mt-6 text-xs uppercase tracking-wide text-[var(--muted)]">Example tasks</div>
-        <div className="mt-2 space-y-2">
-          {EXAMPLES.map((example) => (
-            <button
-              key={example}
-              type="button"
-              className="block w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] p-2 text-left text-xs text-[var(--muted)] hover:text-white"
-              onClick={() => setTask(example)}
-            >
-              {example}
-            </button>
-          ))}
-        </div>
-        {recent.length ? (
+        <button
+          type="button"
+          onClick={onNewChat}
+          disabled={!turns.length && !task && !error}
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-left text-sm text-white hover:border-[var(--accent)] disabled:opacity-40"
+        >
+          New chat
+        </button>
+        <p className="mt-1 text-[11px] text-[var(--muted)]">Starts a blank page. Previous chats stay here; the model does not use them as memory.</p>
+        {listedChats.length ? (
           <>
-            <div className="mt-6 text-xs uppercase tracking-wide text-[var(--muted)]">Recent runs</div>
+            <div className="mt-6 text-xs uppercase tracking-wide text-[var(--muted)]">Chats</div>
             <div className="mt-2 space-y-2">
-              {recent.map((turn) => (
-                <button
-                  key={turn.executionId}
-                  type="button"
-                  className="block w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] p-2 text-left text-xs text-[var(--muted)] hover:text-white"
-                  onClick={() =>
-                    document.getElementById(`turn-${turn.executionId}`)?.scrollIntoView({ behavior: "smooth", block: "start" })
-                  }
+              {listedChats.map((chat) => (
+                <div
+                  key={chat.id}
+                  className={`rounded-lg border p-2 ${
+                    chat.id === activeChatId
+                      ? "border-[var(--accent)] bg-[var(--bg)]"
+                      : "border-[var(--border)] bg-[var(--bg)]"
+                  }`}
                 >
-                  <div className="line-clamp-2">{turn.prompt}</div>
-                  <div className="mt-1 text-[11px] text-[var(--muted)]">
-                    {turn.fingerprint?.model || turn.status}
+                  {renamingId === chat.id ? (
+                    <input
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(event) => setRenameDraft(event.target.value)}
+                      onBlur={() => commitRename(chat.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitRename(chat.id);
+                        }
+                        if (event.key === "Escape") setRenamingId(null);
+                      }}
+                      className="w-full rounded border border-[var(--accent)] bg-[var(--panel)] px-1.5 py-1 text-xs text-white outline-none"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className={`block w-full text-left text-xs hover:text-white ${
+                        chat.id === activeChatId ? "text-white" : "text-[var(--muted)]"
+                      }`}
+                      onClick={() => openChat(chat.id)}
+                    >
+                      <div className="line-clamp-2">{displayTitle(chat)}</div>
+                    </button>
+                  )}
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <div className="text-[11px] text-[var(--muted)]">
+                      {chat.turns.length ? `${chat.turns.length} run${chat.turns.length === 1 ? "" : "s"}` : "Empty"}
+                    </div>
+                    <button
+                      type="button"
+                      className="text-[11px] text-[var(--accent-2)] hover:text-white"
+                      onClick={() => startRename(chat)}
+                    >
+                      Rename
+                    </button>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           </>
@@ -272,19 +456,28 @@ export function AgentPage() {
             <div className="rounded-lg border border-[var(--error)]/40 bg-[var(--error)]/10 px-3 py-2 text-sm">{error}</div>
           ) : null}
           {!turns.length && !running ? (
-            <p className="text-sm text-[var(--muted)]">Give the agent a task to start an execution. Previous prompts and answers stay on this page for comparison; they are not sent back to the model.</p>
+            <p className="text-sm text-[var(--muted)]">Give the agent a task to start an execution. New chat opens a blank page; open a previous chat from the sidebar to see its prompt, answer, and tools. Each run is independent.</p>
           ) : (
             <div className="space-y-8">
               {turns.length ? (
-                <p className="text-xs text-[var(--muted)]">
-                  Run history on this page is for comparison only. Each run is independent.
-                </p>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-[var(--muted)]">
+                    This chat is a log, not memory. Each run is independent.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onNewChat}
+                    className="shrink-0 rounded-md border border-[var(--border)] px-3 py-1 text-xs text-white hover:border-[var(--accent)]"
+                  >
+                    New chat
+                  </button>
+                </div>
               ) : null}
               {turns.map((turn) => (
                 <AgentTurn
                   key={turn.executionId}
                   turn={turn}
-                  live={turn.executionId === executionId && running}
+                  live={turn.executionId === liveTurn?.executionId}
                   onReuse={reusePrompt}
                   onToggleTrace={loadTrace}
                 />
@@ -321,7 +514,8 @@ export function AgentPage() {
                     try {
                       await api.upload(file);
                       const listed = await api.uploads();
-                      setUploads(listed.files);
+                      setUploads(listed.uploads || listed.files);
+                      setBuiltin(listed.builtin || []);
                       setRagEnabled(true);
                     } catch (err) {
                       setError(err instanceof Error ? err.message : "Upload failed");
@@ -332,15 +526,16 @@ export function AgentPage() {
                 />
               </span>
             </label>
+            <KnowledgeFilesPanel
+              uploads={uploads}
+              builtin={builtin}
+              onChange={(next) => {
+                setUploads(next.uploads);
+                setBuiltin(next.builtin);
+              }}
+              onError={setError}
+            />
             {uploading ? <span className="text-xs text-[var(--muted)]">Indexing…</span> : null}
-            {uploads.length ? (
-              <span
-                className="min-w-0 flex-1 truncate text-xs text-[var(--muted)]"
-                title={uploads.map((file) => file.name).join(", ")}
-              >
-                In knowledge: {uploads.map((file) => file.name).join(", ")}
-              </span>
-            ) : null}
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <label className="text-xs text-[var(--muted)]">

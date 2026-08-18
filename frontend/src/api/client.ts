@@ -71,7 +71,14 @@ export const api = {
   toolAnalytics: (query: string) => request<{ tools: ToolRow[] }>(`/api/analytics/tools${query}`),
   history: (query: string) => request<{ executions: HistoryRow[] }>(`/api/analytics/history${query}`),
   comparison: (id: string) => request<{ group: ComparisonGroup | null; table: { metric: string; runs: unknown[] }[]; executions: HistoryRow[]; note: string }>(`/api/analytics/comparisons/${id}`),
-  uploads: () => request<{ files: { name: string; path: string; bytes: number }[] }>("/api/uploads"),
+  uploads: () =>
+    request<{
+      files: { name: string; path: string; bytes: number }[];
+      uploads?: { name: string; path: string; bytes: number }[];
+      builtin?: { name: string; path: string; bytes: number }[];
+    }>("/api/uploads"),
+  deleteUpload: (name: string) =>
+    request<{ deleted: string; path: string }>(`/api/uploads/${encodeURIComponent(name)}`, { method: "DELETE" }),
   upload: async (file: File) => {
     const form = new FormData();
     form.append("file", file);

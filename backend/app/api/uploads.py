@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from ..agent.tools import workspace_root
-from ..rag.service import ingest_knowledge
+from ..rag.service import ingest_knowledge, list_knowledge_catalog
 
 router = APIRouter()
 
@@ -28,20 +28,37 @@ def _safe_name(name: str) -> str:
     return cleaned
 
 
+def _reject_traversal(name: str) -> None:
+    if not name or name in {".", ".."} or "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(status_code=400, detail="Invalid file name")
+
+
 def uploads_dir() -> Path:
     path = workspace_root() / "uploads"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
+def _upload_path(name: str) -> Path:
+    _reject_traversal(name)
+    filename = _safe_name(name)
+    folder = uploads_dir().resolve()
+    dest = (folder / filename).resolve()
+    if folder not in dest.parents and dest != folder:
+        raise HTTPException(status_code=400, detail="Path is outside uploads")
+    if dest.parent != folder:
+        raise HTTPException(status_code=400, detail="Path is outside uploads")
+    return dest
+
+
 @router.get("/api/uploads")
 async def list_uploads() -> dict:
-    folder = uploads_dir()
-    files = []
-    for path in sorted(folder.iterdir()):
-        if path.is_file() and path.name != ".gitkeep":
-            files.append({"name": path.name, "path": f"uploads/{path.name}", "bytes": path.stat().st_size})
-    return {"files": files}
+    catalog = list_knowledge_catalog()
+    return {
+        "files": catalog["uploads"],
+        "uploads": catalog["uploads"],
+        "builtin": catalog["builtin"],
+    }
 
 
 @router.post("/api/uploads")
@@ -50,7 +67,7 @@ async def upload_file(file: UploadFile = File(...)) -> dict:
     raw = await file.read()
     if len(raw) > MAX_BYTES:
         raise HTTPException(status_code=400, detail="File is larger than 2 MB")
-    dest = uploads_dir() / filename
+    dest = _upload_path(filename)
     dest.write_bytes(raw)
     ingest = await ingest_knowledge()
     return {
@@ -59,3 +76,13 @@ async def upload_file(file: UploadFile = File(...)) -> dict:
         "bytes": dest.stat().st_size,
         "ingest": ingest,
     }
+
+
+@router.delete("/api/uploads/{name}")
+async def delete_upload(name: str) -> dict:
+    dest = _upload_path(name)
+    if dest.name == ".gitkeep" or not dest.is_file():
+        raise HTTPException(status_code=404, detail="Upload not found")
+    dest.unlink()
+    ingest = await ingest_knowledge()
+    return {"deleted": dest.name, "path": f"uploads/{dest.name}", "ingest": ingest}

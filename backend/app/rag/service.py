@@ -119,13 +119,56 @@ def _chroma_collection():
 _memory_index: list[dict[str, Any]] = []
 
 
+def list_knowledge_catalog() -> dict[str, list[dict[str, Any]]]:
+    workspace = get_settings().workspace_dir
+    uploads: list[dict[str, Any]] = []
+    builtin: list[dict[str, Any]] = []
+    for path in knowledge_files():
+        try:
+            rel = path.relative_to(workspace).as_posix()
+        except ValueError:
+            rel = path.name
+        item = {"name": path.name, "path": rel, "bytes": path.stat().st_size}
+        if path.parent.name == "uploads":
+            uploads.append(item)
+        else:
+            builtin.append(item)
+    return {"uploads": uploads, "builtin": builtin}
+
+
+def _prune_chroma(collection: Any, keep_ids: set[str]) -> int:
+    try:
+        existing = collection.get(include=[])
+        stale = [item for item in (existing.get("ids") or []) if item not in keep_ids]
+        if stale:
+            collection.delete(ids=stale)
+        return len(stale)
+    except Exception as exc:
+        logger.warning("Chroma prune failed: %s", exc)
+        return 0
+
+
+def _reset_memory_index(docs: list[dict[str, Any]], embeddings: list[list[float]] | None) -> None:
+    global _memory_index
+    _memory_index = []
+    for doc, embedding in zip(docs, embeddings or [None] * len(docs)):
+        item = dict(doc)
+        item["embedding"] = embedding
+        _memory_index.append(item)
+
+
 async def ingest_knowledge() -> dict[str, Any]:
     docs = _local_documents()
+    keep_ids = {doc["id"] for doc in docs}
+    collection = _chroma_collection()
+
     if not docs:
+        if collection is not None:
+            _prune_chroma(collection, set())
+        _reset_memory_index([], None)
         return {"status": "empty", "chunks": 0, "backend": "none"}
 
     embeddings = await _embed([doc["text"] for doc in docs])
-    collection = _chroma_collection()
     if collection is not None and embeddings is not None:
         collection.upsert(
             ids=[doc["id"] for doc in docs],
@@ -141,14 +184,12 @@ async def ingest_knowledge() -> dict[str, Any]:
                 for doc in docs
             ],
         )
-        return {"status": "ok", "chunks": len(docs), "backend": "chroma_cloud"}
+        pruned = _prune_chroma(collection, keep_ids)
+        return {"status": "ok", "chunks": len(docs), "pruned": pruned, "backend": "chroma_cloud"}
 
-    global _memory_index
-    _memory_index = []
-    for doc, embedding in zip(docs, embeddings or [None] * len(docs)):
-        item = dict(doc)
-        item["embedding"] = embedding
-        _memory_index.append(item)
+    _reset_memory_index(docs, embeddings)
+    if collection is not None:
+        _prune_chroma(collection, keep_ids)
     return {
         "status": "ok",
         "chunks": len(docs),
