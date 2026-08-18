@@ -1,9 +1,11 @@
 # The backend runs on Render, not here. Vercel auto-creates a Python function from any
 # /api directory, which would shadow the external rewrite in vercel.json.
-api/
+# Leading slashes anchor these to the repo root: an unanchored "api/" also matches
+# frontend/src/api/, which the Vite build imports.
+/api/
 
 # Not needed by the Vite build; excluded to keep the deployment upload small.
-backend/
-sample_workspace/
-docs/
-.venv/
+/backend/
+/sample_workspace/
+/docs/
+/.venv/
