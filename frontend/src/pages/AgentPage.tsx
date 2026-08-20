@@ -70,6 +70,7 @@ export function AgentPage() {
   const [modelId, setModelId] = useState("");
   const [ragEnabled, setRagEnabled] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatSession[]>([bootstrap]);
   const [activeChatId, setActiveChatId] = useState(bootstrap.id);
@@ -82,6 +83,7 @@ export function AgentPage() {
   const [renameDraft, setRenameDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const startingRef = useRef(false);
 
   const selected = useMemo(() => models.find((item) => `${item.provider}:${item.model_id}` === modelId), [models, modelId]);
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
@@ -266,8 +268,10 @@ export function AgentPage() {
 
   async function onRun(event: FormEvent) {
     event.preventDefault();
-    if (!selected || !task.trim()) return;
+    if (startingRef.current || starting || running || !selected || !task.trim()) return;
     const prompt = task.trim();
+    startingRef.current = true;
+    setStarting(true);
     setError(null);
     try {
       const result = await api.startExecution({
@@ -297,6 +301,9 @@ export function AgentPage() {
       setTask("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start execution");
+    } finally {
+      startingRef.current = false;
+      setStarting(false);
     }
   }
 
@@ -604,10 +611,10 @@ export function AgentPage() {
             ) : (
               <button
                 type="submit"
-                disabled={!task.trim()}
+                disabled={!task.trim() || starting}
                 className="ml-auto rounded-md bg-[var(--accent)] px-4 py-1.5 text-sm font-medium text-black disabled:opacity-40"
               >
-                Run
+                {starting ? "Starting…" : "Run"}
               </button>
             )}
           </div>
