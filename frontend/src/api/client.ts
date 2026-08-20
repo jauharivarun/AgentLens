@@ -18,6 +18,30 @@ export function getInstallationId(): string {
   return id;
 }
 
+async function readBody(response: Response): Promise<unknown> {
+  const raw = await response.text();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function errorMessage(body: unknown, response: Response): string {
+  if (typeof body === "string" && body.trim()) return body;
+  if (body && typeof body === "object") {
+    const detail = (body as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+    if (detail !== undefined) return JSON.stringify(detail);
+    return JSON.stringify(body);
+  }
+  if (response.status === 502 || response.status === 503) {
+    return "The backend is waking up or temporarily down. Wait about a minute and try again.";
+  }
+  return response.statusText || `Request failed (${response.status})`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -27,17 +51,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers || {}),
     },
   });
+  const body = await readBody(response);
   if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = await response.json();
-      detail = body.detail || JSON.stringify(body);
-    } catch {
-      detail = await response.text();
-    }
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    throw new Error(errorMessage(body, response));
   }
-  return response.json() as Promise<T>;
+  return body as T;
 }
 
 export const api = {
@@ -87,16 +105,10 @@ export const api = {
       headers: { "X-Installation-Id": getInstallationId() },
       body: form,
     });
+    const body = await readBody(response);
     if (!response.ok) {
-      let detail = response.statusText;
-      try {
-        const body = await response.json();
-        detail = body.detail || JSON.stringify(body);
-      } catch {
-        detail = await response.text();
-      }
-      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+      throw new Error(errorMessage(body, response));
     }
-    return response.json() as Promise<{ name: string; path: string; bytes: number }>;
+    return body as { name: string; path: string; bytes: number };
   },
 };
